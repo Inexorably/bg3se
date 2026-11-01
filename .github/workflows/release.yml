@@ -72,17 +72,20 @@ jobs:
           if (-not (Test-Path 'External\lua')) { throw 'External\lua missing after pull-externals' }
 
           # protobuf >= 22 links against Abseil, and libprotobuf-lite also calls
-          # into the vendored utf8_range library. BG3Extender.vcxproj names only
-          # libprotobuf-lite.lib, so both sets of archives must be supplied
-          # explicitly (the link otherwise fails with LNK2001/LNK1120).
-          $libs = @(Get-ChildItem -Path External\protobuf-build -Recurse -File -Include 'absl_*.lib', 'utf8_*.lib' |
+          # into protobuf's vendored utf8_range library. BG3Extender.vcxproj names
+          # only libprotobuf-lite.lib, so every archive the protobuf build
+          # produces is supplied explicitly (the link otherwise fails with
+          # LNK2001/LNK1120). Unused archives are ignored by the linker, so
+          # listing them all is safer than guessing individual names.
+          $libs = @(Get-ChildItem -Path External\protobuf-build -Recurse -File -Filter '*.lib' |
             Where-Object { $_.FullName -match '\\Release\\' })
-          if ($libs.Count -eq 0) { throw 'no absl_*.lib / utf8_*.lib found under External\protobuf-build' }
+          if ($libs.Count -eq 0) { throw 'no .lib found under External\protobuf-build (Release)' }
           $dirs = ($libs | ForEach-Object { $_.DirectoryName } | Select-Object -Unique) -join ';'
           $deps = (($libs | ForEach-Object { $_.Name }) | Sort-Object -Unique) -join ';'
           "BG3SE_EXTRA_LIB_DIRS=$dirs" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "BG3SE_EXTRA_LIBS=$deps" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "Support libs: $($libs.Count) in $dirs"
+          Write-Host "Support libs ($($libs.Count)): $(($libs | ForEach-Object { $_.Name } | Sort-Object -Unique) -join ', ')"
+          Write-Host "Support lib dirs: $dirs"
 
       - name: Generate sources
         shell: pwsh
