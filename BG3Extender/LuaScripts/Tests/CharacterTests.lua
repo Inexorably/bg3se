@@ -217,8 +217,34 @@ function TestCharacterTemplateProperties()
 
 end
 
+function TestCharacterArmorClass()
+    local ch = Ext.GetCharacter(GUID_LAEZEL)
+
+    -- GUID and entity arguments must resolve to the same character
+    local byGuid = Ext.Entity.GetArmorClass(GUID_LAEZEL)
+    local byEntity = Ext.Entity.GetArmorClass(ch)
+    AssertEquals(byGuid.Total, byEntity.Total)
+    AssertEquals(byGuid.HasArmor, true)
+
+    -- The engine total is authoritative when it is populated; the rebuilt value
+    -- is only the diagnostic breakdown.
+    if byGuid.EngineAC ~= 0 then
+        AssertEquals(byGuid.Total, byGuid.EngineAC)
+        AssertEquals(byGuid.Source, "engine")
+    else
+        AssertEquals(byGuid.Total, byGuid.Computed)
+        AssertEquals(byGuid.Source, "components")
+        AssertEquals(byGuid.Computed,
+            math.max(byGuid.Base + byGuid.AbilityModifier, byGuid.OverrideAC) + byGuid.Boosts)
+    end
+
+    -- Non-existent entities resolve to nil
+    AssertEquals(Ext.Entity.GetArmorClass("00000000-0000-0000-0000-000000000000"), nil)
+end
+
 RegisterTests("Character", {
     "TestCharacterEnumeration",
     "TestCharacterProperties",
-    "TestCharacterTemplateProperties"
+    "TestCharacterTemplateProperties",
+    "TestCharacterArmorClass"
 })

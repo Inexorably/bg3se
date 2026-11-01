@@ -798,6 +798,63 @@ The Lua `Entity` class is the represntation of an ingame object (eg. character, 
  - [The Entity-Component-System - An awesome game-design pattern in C++ ](https://www.gamasutra.com/blogs/TobiasStein/20171122/310172/The_EntityComponentSystem__An_awesome_gamedesign_pattern_in_C_Part_1.php)
 
 
+### Ext.Entity.GetArmorClass(entity) : ArmorClassInfo?
+
+Returns the Armor Class (AC) of an entity. `entity` accepts the same values as `Ext.Entity.Get`: an `Entity` object, a GUID string, or a network ID. The function returns `nil` for a non-existent entity.
+
+`Total` is the engine's own AC: `eoc::ResistancesComponent::AC`, the same value the game sums up and shows on the character sheet, already including worn armour, the ability contribution, and every evaluated status/passive/spell/shield boost. When it is available the function reads it and returns it unchanged (`Source == "engine"`); it never re-sums the sources and never lets a locally rebuilt value override or inflate the engine total.
+
+The per-source breakdown is reported for diagnostics (and used as `Total` only when the engine field is empty, `Source == "components"`). It reads typed ECS components, so no stat strings have to be parsed:
+
+ - `eoc::ArmorComponent`: base score, `ArmorClassAbility`, `AbilityModifierCap`
+ - `eoc::StatsComponent::AbilityModifiers` for the ability contribution
+ - `eoc::BlockAbilityModifierFromACComponent`, which heavy armour applies
+ - every evaluated `eoc::ArmorClassBoostComponent` reachable through the entity's `BoostsContainer`
+ - the best `eoc::ACOverrideFormulaBoostComponent` (Mage Armor, Barkskin), which replaces the base calculation instead of adding to it
+
+`Source == "components"` means the engine field was empty and the rebuild cannot see AC that lives on worn items; the function logs a warning in that case and callers should treat `Total` as incomplete rather than as the character sheet value.
+
+Example:
+```lua
+local ac = Ext.Entity.GetArmorClass(GetHostCharacter())
+_D(ac)
+-- Prints:
+-- {
+--      "Ability" : "Dexterity",
+--      "AbilityBlocked" : false,
+--      "AbilityModifier" : 1,
+--      "AbilityModifierCap" : 2,
+--      "Base" : 16,
+--      "BoostCount" : 2,
+--      "Boosts" : 4,
+--      "Computed" : 21,
+--      "EngineAC" : 21,
+--      "HasArmor" : true,
+--      "OverrideAC" : 16,
+--      "RawAbilityModifier" : 1,
+--      "Source" : "engine",
+--      "Total" : 21
+-- }
+```
+
+| Field | Description |
+|-------|-------------|
+| `Total` | The entity's AC: `EngineAC` when the engine reports one, otherwise `Computed`. |
+| `Source` | `"engine"` when `Total` is the game's own value, `"components"` when it was rebuilt locally. |
+| `EngineAC` | `eoc::ResistancesComponent::AC`; 0 when the engine does not populate it. |
+| `Computed` | Diagnostic rebuild: `max(Base + AbilityModifier, OverrideAC) + Boosts`. |
+| `Base` | `eoc::ArmorComponent::ArmorClass`. |
+| `Ability` | Ability whose modifier is added to `Base`. |
+| `RawAbilityModifier` | Unmodified `eoc::StatsComponent::AbilityModifiers` entry for `Ability`. |
+| `AbilityModifier` | Modifier actually applied, after `AbilityModifierCap` and `BlockAbilityModifierFromAC`. |
+| `AbilityModifierCap` | `eoc::ArmorComponent::AbilityModifierCap`. |
+| `AbilityBlocked` | True when the `BlockAbilityModifierFromAC` boost removes the ability modifier. |
+| `Boosts` | Sum of all evaluated `eoc::ArmorClassBoostComponent::AC` values. |
+| `BoostCount` | Number of AC boost components that contributed to `Boosts`. |
+| `OverrideAC` | Highest base-score override, or 0 when no override is active. |
+| `HasArmor` | True when the entity has an `eoc::ArmorComponent`. |
+
+
 ### Entity:GetAllComponentNames() : string[]
 
 Returns all engine component types (native C++ class names) that the entity has.

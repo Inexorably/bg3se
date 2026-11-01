@@ -1,4 +1,6 @@
 /// <lua_module>Entity</lua_module>
+#include <GameDefinitions/Components/All.h>
+
 BEGIN_NS(lua::entity)
 
 std::optional<Guid> HandleToUuid(lua_State* L, EntityHandle entity)
@@ -67,6 +69,217 @@ UserReturn Get(lua_State* L, lua::AnyRef entity)
     }
 
     return 1;
+}
+
+// Armor Class (AC) of an entity.
+//
+// The authoritative value is eoc::ResistancesComponent::AC: the AC the engine
+// itself sums up and shows on the character sheet (it already includes worn
+// armour, ability contribution and every evaluated boost). At runtime it is
+// returned unchanged as Total with Source = "engine"; it is never combined with,
+// or overridden by, a value rebuilt in this function.
+//
+// The per-source rebuild below produces the `Computed` breakdown for diagnostics
+// and is used as Total only when the engine field is empty (Source =
+// "components"). It reads the same inputs the engine uses, in typed ECS form so no
+// stat strings have to be parsed:
+//   - eoc::ArmorComponent (base score, ArmorClassAbility, AbilityModifierCap)
+//   - eoc::StatsComponent::AbilityModifiers for the ability contribution
+//   - BlockAbilityModifierFromAC, which heavy armour applies
+//   - every evaluated eoc::ArmorClassBoostComponent reachable through the entity's
+//     BoostsContainer (statuses, passives, spells, shields)
+//   - the best evaluated eoc::ACOverrideFormulaBoostComponent (Mage Armor,
+//     Barkskin), which replaces the base calculation instead of adding to it
+// The boost components are already evaluated, so no stat strings are parsed. This
+// rebuild cannot see AC that lives on worn items, which is exactly why it is never
+// allowed to override the engine total.
+
+struct ArmorClassInfo
+{
+    int Total{ 0 };
+    int EngineAC{ 0 };
+    int Computed{ 0 };
+    int Base{ 0 };
+    AbilityId Ability{ AbilityId::None };
+    int RawAbilityModifier{ 0 };
+    int AbilityModifier{ 0 };
+    int AbilityModifierCap{ 0 };
+    bool AbilityBlocked{ false };
+    int Boosts{ 0 };
+    int BoostCount{ 0 };
+    int OverrideAC{ 0 };
+    bool HasArmor{ false };
+    bool FromEngine{ false };
+};
+
+ArmorClassInfo GetArmorClassInfo(lua_State* L, EntityHandle handle)
+{
+    ArmorClassInfo info;
+    auto ecs = State::FromLua(L)->GetEntitySystemHelpers();
+
+    auto armor = ecs->GetComponent<ArmorComponent>(handle);
+    if (armor != nullptr) {
+        info.HasArmor = true;
+        info.Base = armor->ArmorClass;
+        info.AbilityModifierCap = armor->AbilityModifierCap;
+        info.Ability = armor->ArmorClassAbility < 7
+            ? (AbilityId)armor->ArmorClassAbility
+            : AbilityId::Dexterity;
+        if (info.Ability == AbilityId::None) {
+            // Unarmored entities leave the ability unset; the engine adds Dexterity.
+            info.Ability = AbilityId::Dexterity;
+        }
+    }
+
+    auto resistances = ecs->GetComponent<ResistancesComponent>(handle);
+    if (resistances != nullptr) {
+        info.EngineAC = resistances->AC;
+    }
+
+    info.AbilityBlocked = ecs->GetComponent<BlockAbilityModifierFromACComponent>(handle) != nullptr;
+
+    auto stats = ecs->GetComponent<StatsComponent>(handle);
+    if (stats != nullptr) {
+        auto index = (size_t)info.Ability;
+        if (index < stats->AbilityModifiers.size()) {
+            info.RawAbilityModifier = stats->AbilityModifiers[index];
+        }
+    }
+
+    info.AbilityModifier = info.RawAbilityModifier;
+    if (info.AbilityBlocked) {
+        info.AbilityModifier = 0;
+    } else if (info.AbilityModifier > info.AbilityModifierCap) {
+        info.AbilityModifier = info.AbilityModifierCap;
+    }
+
+    auto container = ecs->GetComponent<BoostsContainerComponent>(handle);
+    if (container != nullptr) {
+        for (auto const& entry : container->Boosts) {
+            if (entry.Type == BoostType::AC) {
+                for (auto const& boostHandle : entry.Boosts) {
+                    auto ac = ecs->GetComponent<ArmorClassBoostComponent>(boostHandle);
+                    if (ac != nullptr) {
+                        info.Boosts += ac->AC;
+                        info.BoostCount++;
+                    }
+                }
+            } else if (entry.Type == BoostType::ACOverrideFormula) {
+                // Mage Armor / Barkskin / worn body armour: replaces the base
+                // score instead of adding to it.
+                for (auto const& boostHandle : entry.Boosts) {
+                    auto formula = ecs->GetComponent<ACOverrideFormulaBoostComponent>(boostHandle);
+                    if (formula == nullptr) {
+                        continue;
+                    }
+
+                    auto value = formula->AC;
+                    for (auto ability : formula->AddAbilityModifiers) {
+                        auto index = (size_t)ability;
+                        if (stats != nullptr && index < stats->AbilityModifiers.size()) {
+                            value += stats->AbilityModifiers[index];
+                        }
+                    }
+
+                    if (value > info.OverrideAC) {
+                        info.OverrideAC = value;
+                    }
+                }
+            }
+        }
+    }
+
+    auto baseAC = info.Base + info.AbilityModifier;
+    if (info.OverrideAC > baseAC) {
+        baseAC = info.OverrideAC;
+    }
+    info.Computed = baseAC + info.Boosts;
+    // ResistancesComponent::AC is the engine's own total and is authoritative.
+    // Never let the local rebuild override or inflate it; the rebuild is only a
+    // diagnostic breakdown, or a last-resort total when the engine field is empty.
+    info.Total = info.EngineAC != 0 ? info.EngineAC : info.Computed;
+    info.FromEngine = info.EngineAC != 0;
+
+    if (!info.FromEngine && info.HasArmor) {
+        // The rebuild cannot see AC that lives on worn items, so a zero engine
+        // total means the value we return is incomplete. Say so loudly instead
+        // of silently returning a number that looks authoritative.
+        WARN_ONCE("eoc::ResistancesComponent.AC is zero for a character; "
+            "Total is rebuilt from components and excludes worn item AC");
+    }
+
+    return info;
+}
+
+int PushArmorClassInfo(lua_State* L, ArmorClassInfo const& info)
+{
+    lua_createtable(L, 0, 14);
+
+    lua_pushinteger(L, info.Total);
+    lua_setfield(L, -2, "Total");
+    lua_pushinteger(L, info.EngineAC);
+    lua_setfield(L, -2, "EngineAC");
+    lua_pushinteger(L, info.Computed);
+    lua_setfield(L, -2, "Computed");
+    lua_pushinteger(L, info.Base);
+    lua_setfield(L, -2, "Base");
+    lua_pushinteger(L, info.RawAbilityModifier);
+    lua_setfield(L, -2, "RawAbilityModifier");
+    lua_pushinteger(L, info.AbilityModifier);
+    lua_setfield(L, -2, "AbilityModifier");
+    lua_pushinteger(L, info.AbilityModifierCap);
+    lua_setfield(L, -2, "AbilityModifierCap");
+    lua_pushinteger(L, info.Boosts);
+    lua_setfield(L, -2, "Boosts");
+    lua_pushinteger(L, info.BoostCount);
+    lua_setfield(L, -2, "BoostCount");
+    lua_pushinteger(L, info.OverrideAC);
+    lua_setfield(L, -2, "OverrideAC");
+    lua_pushboolean(L, info.AbilityBlocked);
+    lua_setfield(L, -2, "AbilityBlocked");
+    lua_pushboolean(L, info.HasArmor);
+    lua_setfield(L, -2, "HasArmor");
+
+    push(L, EnumInfo<AbilityId>::Find(info.Ability));
+    lua_setfield(L, -2, "Ability");
+    lua_pushstring(L, info.FromEngine ? "engine" : "components");
+    lua_setfield(L, -2, "Source");
+
+    return 1;
+}
+
+UserReturn GetArmorClass(lua_State* L, lua::AnyRef entity)
+{
+    StackCheck _(L, 1);
+    std::optional<EntityHandle> handle;
+
+    switch (lua_type(L, entity.Index)) {
+    case LUA_TNIL:
+        break;
+
+    case LUA_TSTRING:
+        handle = UuidToHandle(L, get<Guid>(L, entity.Index));
+        break;
+
+    case LUA_TNUMBER:
+        handle = State::FromLua(L)->GetEntitySystemHelpers()->NetIdToEntity(get<NetId>(L, entity.Index));
+        break;
+
+    case LUA_TLIGHTCPPOBJECT:
+        handle = get<EntityHandle>(L, entity.Index);
+        break;
+
+    default:
+        return luaL_error(L, "Expected entity GUID, network ID or entity handle, got %s", GetDebugName(L, entity.Index));
+    }
+
+    if (!handle) {
+        push(L, nullptr);
+        return 1;
+    }
+
+    auto info = GetArmorClassInfo(L, *handle);
+    return PushArmorClassInfo(L, info);
 }
 
 HashMap<Guid, EntityHandle> GetAllEntitiesWithUuid(lua_State* L)
@@ -315,6 +528,7 @@ void RegisterEntityLib()
     MODULE_FUNCTION(UuidToHandle)
 
     MODULE_FUNCTION(Get)
+    MODULE_FUNCTION(GetArmorClass)
     MODULE_FUNCTION(GetAllEntitiesWithUuid)
     MODULE_FUNCTION(GetAllEntitiesWithComponent)
     MODULE_FUNCTION(GetAllEntities)

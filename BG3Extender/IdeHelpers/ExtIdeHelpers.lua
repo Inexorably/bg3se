@@ -2171,6 +2171,23 @@ Osi = {}
 --- @field Value int32
 
 
+--- @class ArmorClassInfo
+--- @field Ability AbilityId
+--- @field AbilityBlocked boolean
+--- @field AbilityModifier integer
+--- @field AbilityModifierCap integer
+--- @field Base integer
+--- @field BoostCount integer
+--- @field Boosts integer
+--- @field Computed integer
+--- @field EngineAC integer
+--- @field HasArmor boolean
+--- @field OverrideAC integer
+--- @field RawAbilityModifier integer
+--- @field Source string
+--- @field Total integer
+
+
 --- @class ArmorClassBoostComponent:BaseComponent
 --- @field AC int32
 
@@ -24153,6 +24170,7 @@ local Ext_Debug = {}
 --- @field GetAllEntities fun():EntityHandle[]
 --- @field GetAllEntitiesWithComponent fun(a1:ExtComponentType):EntityHandle[]
 --- @field GetAllEntitiesWithUuid fun():table<Guid, EntityHandle>
+--- @field GetArmorClass fun(a1:AnyRef):ArmorClassInfo?
 --- @field GetEntitiesAroundPosition fun(a1:vec3, a2:number, a3:boolean?, a4:boolean?):EntityHandle[]
 --- @field GetRegisteredComponentTypes fun(a1:boolean?, a2:boolean?):StringView[]
 --- @field GetTrace fun():EcsECSChangeLog
