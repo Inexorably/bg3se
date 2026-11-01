@@ -1,0 +1,131 @@
+# Build BG3SE and publish a GitHub Release from this fork.
+#
+# The release asset is the offline package (DWrite.dll), which is what players
+# copy into the game's bin folder. DOS3's scripts/install-script-extender.ps1
+# downloads exactly that asset and refuses a build that does not contain
+# Ext.Entity.GetArmorClass, so a release cut from a branch without that API is
+# rejected loudly instead of being used silently.
+#
+# Untested in this checkout: building BG3SE needs MSVC, the External/ libraries
+# (pull-externals.bat) and generated sources, none of which are in the
+# repository. Run it once with the workflow_dispatch trigger and read the log
+# before trusting it; the "Hard gate" check is the step that must pass.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (for example se-1.0.0-dos3)
+        required: true
+        type: string
+      draft:
+        description: Create the release as a draft
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Locate MSVC
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path $vswhere)) { throw 'vswhere.exe not found; the runner has no Visual Studio' }
+          $root = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $root) { throw 'No MSVC x64 toolchain on this runner' }
+          $vcvars = Join-Path $root 'VC\Auxiliary\Build\vcvars64.bat'
+          "VCVARS=$vcvars" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Using $vcvars"
+
+      - name: Fetch externals
+        shell: pwsh
+        # pull-externals.bat must run in the vcvars environment; keep the call
+        # and the build in one cmd process so PATH/INCLUDE survive.
+        run: |
+          cmd /c "call `"$env:VCVARS`" >nul && call pull-externals.bat"
+          if ($LASTEXITCODE -ne 0) { throw "pull-externals failed: $LASTEXITCODE" }
+          if (-not (Test-Path 'External\lua')) { throw 'External\lua missing after pull-externals' }
+
+      - name: Generate sources
+        shell: pwsh
+        run: |
+          cmd /c "call `"$env:VCVARS`" >nul && call generate-property-maps.bat"
+          if ($LASTEXITCODE -ne 0) { throw "property map generation failed: $LASTEXITCODE" }
+          cmd /c "call `"$env:VCVARS`" >nul && call generate-proto.bat"
+          if ($LASTEXITCODE -ne 0) { throw "protobuf generation failed: $LASTEXITCODE" }
+          if (-not (Test-Path 'BG3Extender\GameDefinitions\Generated')) {
+            throw 'BG3Extender/GameDefinitions/Generated was not produced'
+          }
+
+      - name: Build Game Release
+        shell: pwsh
+        run: |
+          # publish.ps1 owns the Release channel defines; reproduce only what the
+          # build needs so the DLL matches the published layout.
+          @("#undef SE_IS_DEVELOPER_BUILD", '#define SE_BUILD_CHANNEL "Release"', "#undef SE_CERTIFICATION_ID") |
+            Out-File -FilePath BG3Extender/Extender/BuildInfo.h -Encoding ascii
+          @("#undef SE_RELEASE_ASSERTS") | Out-File -FilePath CoreLib/Config.h -Encoding ascii
+          cmd /c "call `"$env:VCVARS`" >nul && msbuild -version" | Select-Object -First 2
+
+          # Build only what BG3ScriptExtender.dll needs. A whole-solution build
+          # also builds LuaDebugger, whose packages.config dependencies are not
+          # in the repository (NuGet restore is not part of this workflow), so it
+          # fails on a clean runner. The offline package is the DLL alone, so the
+          # updater, debug adapter and signing tools are not needed here.
+          $targets = 'CoreLib;TinyCrypt;LuaLib;imgui;Optick;BG3Extender'
+          cmd /c "call `"$env:VCVARS`" >nul && msbuild BG3Tools.sln /t:$targets /p:Configuration=`"Game Release`" /p:Platform=x64 /m /nologo /v:minimal"
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed: $LASTEXITCODE" }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $dll = 'x64\Game Release\BG3ScriptExtender.dll'
+          if (-not (Test-Path $dll)) { throw "$dll was not produced" }
+
+          # Hard gate: this fork exists to ship GetArmorClass. A build that does
+          # not contain the binding must never become a release.
+          $bytes = [IO.File]::ReadAllBytes($dll)
+          $text = [Text.Encoding]::ASCII.GetString($bytes)
+          if (-not $text.Contains('GetArmorClass')) {
+            throw 'BG3ScriptExtender.dll does not contain GetArmorClass; refusing to publish'
+          }
+
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Copy-Item $dll -Destination 'out\DWrite.dll'
+          git show -s --format="BG3SE Version: Commit %H, %cD" | Out-File -FilePath out\Version.txt -Encoding utf8
+          Compress-Archive -Path out\* -DestinationPath BG3SE-DWrite.zip -CompressionLevel Optimal -Force
+          Get-FileHash BG3SE-DWrite.zip -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  BG3SE-DWrite.zip" } |
+            Out-File -FilePath BG3SE-DWrite.zip.sha256 -Encoding ascii
+          Get-Content BG3SE-DWrite.zip.sha256
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ inputs.tag }}'
+          $args = @('release', 'create', $tag, 'BG3SE-DWrite.zip', 'BG3SE-DWrite.zip.sha256',
+                    '--title', "BG3SE (DOS3 fork) $tag",
+                    '--notes', "Script Extender build from ${{ github.sha }}. Contains Ext.Entity.GetArmorClass.")
+          if ('${{ inputs.draft }}' -eq 'true') { $args += '--draft' }
+          gh @args
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed: $LASTEXITCODE" }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: BG3SE-DWrite
+          path: |
+            BG3SE-DWrite.zip
+            BG3SE-DWrite.zip.sha256
+          if-no-files-found: warn
