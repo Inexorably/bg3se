@@ -12,12 +12,27 @@
 # before trusting it; the "Hard gate" check is the step that must pass.
 name: release
 
+# Builds run on every push so a broken build is visible immediately; only a
+# `se-*` tag (or a manual run) publishes a release. workflow_dispatch alone is
+# not enough: GitHub only lists a dispatchable workflow whose file exists on the
+# default branch, and this one lives on a feature branch.
 on:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+    tags:
+      - 'se-*'
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'BG3Extender/**'
+      - 'CoreLib/**'
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag (for example se-1.0.0-dos3)
-        required: true
+        description: Release tag to publish (for example se-1.0.0-dos3). Empty = build only.
+        required: false
         type: string
       draft:
         description: Create the release as a draft
@@ -109,11 +124,15 @@ jobs:
           Get-Content BG3SE-DWrite.zip.sha256
 
       - name: Publish release
+        # A tag push, or a manual run with a tag, publishes. A plain branch push
+        # only builds so the artifact can be inspected.
+        if: startsWith(github.ref, 'refs/tags/se-') || inputs.tag != ''
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = '${{ inputs.tag }}'
+          $tag = if (startsWith(github.ref, 'refs/tags/')) { '${{ github.ref_name }}' } else { '${{ inputs.tag }}' }
+          if (-not $tag) { throw 'no release tag' }
           $args = @('release', 'create', $tag, 'BG3SE-DWrite.zip', 'BG3SE-DWrite.zip.sha256',
                     '--title', "BG3SE (DOS3 fork) $tag",
                     '--notes', "Script Extender build from ${{ github.sha }}. Contains Ext.Entity.GetArmorClass.")
