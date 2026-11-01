@@ -146,13 +146,22 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          DRAFT: ${{ inputs.draft }}
+          COMMIT_SHA: ${{ github.sha }}
         run: |
-          $tag = if (startsWith(github.ref, 'refs/tags/')) { '${{ github.ref_name }}' } else { '${{ inputs.tag }}' }
+          # Values arrive through the environment; interpolating them into the
+          # script body is both a quoting hazard and a parse error.
+          $tag = if ($env:EVENT_REF -like 'refs/tags/*') { $env:REF_NAME } else { $env:INPUT_TAG }
           if (-not $tag) { throw 'no release tag' }
+
           $args = @('release', 'create', $tag, 'BG3SE-DWrite.zip', 'BG3SE-DWrite.zip.sha256',
                     '--title', "BG3SE (DOS3 fork) $tag",
-                    '--notes', "Script Extender build from ${{ github.sha }}. Contains Ext.Entity.GetArmorClass.")
-          if ('${{ inputs.draft }}' -eq 'true') { $args += '--draft' }
+                    '--notes', "Script Extender build from $($env:COMMIT_SHA). Contains Ext.Entity.GetArmorClass.")
+          if ($env:DRAFT -eq 'true') { $args += '--draft' }
+          Write-Host "gh $($args -join ' ')"
           gh @args
           if ($LASTEXITCODE -ne 0) { throw "gh release create failed: $LASTEXITCODE" }
 
