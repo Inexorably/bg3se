@@ -802,9 +802,9 @@ The Lua `Entity` class is the represntation of an ingame object (eg. character, 
 
 Returns the Armor Class (AC) of an entity. `entity` accepts the same values as `Ext.Entity.Get`: an `Entity` object, a GUID string, or a network ID. The function returns `nil` for a non-existent entity.
 
-`Total` is the engine's own AC: `eoc::ResistancesComponent::AC`, the same value the game sums up and shows on the character sheet, already including worn armour, the ability contribution, and every evaluated status/passive/spell/shield boost. When it is available the function reads it and returns it unchanged (`Source == "engine"`); it never re-sums the sources and never lets a locally rebuilt value override or inflate the engine total.
+`Total` is the engine's own AC: `eoc::ResistancesComponent::AC`, the same value the game sums up and shows on the character sheet, already including worn armour, the ability contribution, and every evaluated status/passive/spell/shield boost. It is returned unchanged. This is the only AC the function reports - there is no substitute value, and `Available` is false when the engine field is zero.
 
-The per-source breakdown is reported for diagnostics (and used as `Total` only when the engine field is empty, `Source == "components"`). It reads typed ECS components, so no stat strings have to be parsed:
+The per-source breakdown is diagnostic only and is never used as `Total`, because it cannot see AC that lives on worn items. It reads typed ECS components, so no stat strings have to be parsed:
 
  - `eoc::ArmorComponent`: base score, `ArmorClassAbility`, `AbilityModifierCap`
  - `eoc::StatsComponent::AbilityModifiers` for the ability contribution
@@ -812,7 +812,7 @@ The per-source breakdown is reported for diagnostics (and used as `Total` only w
  - every evaluated `eoc::ArmorClassBoostComponent` reachable through the entity's `BoostsContainer`
  - the best `eoc::ACOverrideFormulaBoostComponent` (Mage Armor, Barkskin), which replaces the base calculation instead of adding to it
 
-`Source == "components"` means the engine field was empty and the rebuild cannot see AC that lives on worn items; the function logs a warning in that case and callers should treat `Total` as incomplete rather than as the character sheet value.
+When `Available` is false the function logs a warning once. Callers should skip the dependent calculation rather than substitute a default.
 
 Example:
 ```lua
@@ -822,6 +822,7 @@ _D(ac)
 -- {
 --      "Ability" : "Dexterity",
 --      "AbilityBlocked" : false,
+--      "Available" : true,
 --      "AbilityModifier" : 1,
 --      "AbilityModifierCap" : 2,
 --      "Base" : 16,
@@ -832,17 +833,16 @@ _D(ac)
 --      "HasArmor" : true,
 --      "OverrideAC" : 16,
 --      "RawAbilityModifier" : 1,
---      "Source" : "engine",
 --      "Total" : 21
 -- }
 ```
 
 | Field | Description |
 |-------|-------------|
-| `Total` | The entity's AC: `EngineAC` when the engine reports one, otherwise `Computed`. |
-| `Source` | `"engine"` when `Total` is the game's own value, `"components"` when it was rebuilt locally. |
-| `EngineAC` | `eoc::ResistancesComponent::AC`; 0 when the engine does not populate it. |
-| `Computed` | Diagnostic rebuild: `max(Base + AbilityModifier, OverrideAC) + Boosts`. |
+| `Total` | The entity's AC, identical to `EngineAC`; 0 when unavailable. |
+| `Available` | False when `eoc::ResistancesComponent::AC` is zero. There is no fallback. |
+| `EngineAC` | `eoc::ResistancesComponent::AC`, the value reported as `Total`. |
+| `Computed` | Diagnostic rebuild only: `max(Base + AbilityModifier, OverrideAC) + Boosts`. Never reported as `Total`. |
 | `Base` | `eoc::ArmorComponent::ArmorClass`. |
 | `Ability` | Ability whose modifier is added to `Base`. |
 | `RawAbilityModifier` | Unmodified `eoc::StatsComponent::AbilityModifiers` entry for `Ability`. |

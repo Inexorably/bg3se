@@ -73,16 +73,14 @@ UserReturn Get(lua_State* L, lua::AnyRef entity)
 
 // Armor Class (AC) of an entity.
 //
-// The authoritative value is eoc::ResistancesComponent::AC: the AC the engine
-// itself sums up and shows on the character sheet (it already includes worn
-// armour, ability contribution and every evaluated boost). At runtime it is
-// returned unchanged as Total with Source = "engine"; it is never combined with,
-// or overridden by, a value rebuilt in this function.
+// eoc::ResistancesComponent::AC is the only source: the AC the engine itself sums
+// up and shows on the character sheet, already including worn armour, the ability
+// contribution and every evaluated boost. It is returned unchanged as Total, and
+// Available is false when the engine field is zero - there is no substitute value.
 //
 // The per-source rebuild below produces the `Computed` breakdown for diagnostics
-// and is used as Total only when the engine field is empty (Source =
-// "components"). It reads the same inputs the engine uses, in typed ECS form so no
-// stat strings have to be parsed:
+// only. It cannot see AC that lives on worn items, so it must never stand in for
+// Total. It reads typed ECS components so no stat strings are parsed:
 //   - eoc::ArmorComponent (base score, ArmorClassAbility, AbilityModifierCap)
 //   - eoc::StatsComponent::AbilityModifiers for the ability contribution
 //   - BlockAbilityModifierFromAC, which heavy armour applies
@@ -90,9 +88,6 @@ UserReturn Get(lua_State* L, lua::AnyRef entity)
 //     BoostsContainer (statuses, passives, spells, shields)
 //   - the best evaluated eoc::ACOverrideFormulaBoostComponent (Mage Armor,
 //     Barkskin), which replaces the base calculation instead of adding to it
-// The boost components are already evaluated, so no stat strings are parsed. This
-// rebuild cannot see AC that lives on worn items, which is exactly why it is never
-// allowed to override the engine total.
 
 struct ArmorClassInfo
 {
@@ -109,7 +104,7 @@ struct ArmorClassInfo
     int BoostCount{ 0 };
     int OverrideAC{ 0 };
     bool HasArmor{ false };
-    bool FromEngine{ false };
+    bool Available{ false };
 };
 
 ArmorClassInfo GetArmorClassInfo(lua_State* L, EntityHandle handle)
@@ -194,18 +189,14 @@ ArmorClassInfo GetArmorClassInfo(lua_State* L, EntityHandle handle)
         baseAC = info.OverrideAC;
     }
     info.Computed = baseAC + info.Boosts;
-    // ResistancesComponent::AC is the engine's own total and is authoritative.
-    // Never let the local rebuild override or inflate it; the rebuild is only a
-    // diagnostic breakdown, or a last-resort total when the engine field is empty.
-    info.Total = info.EngineAC != 0 ? info.EngineAC : info.Computed;
-    info.FromEngine = info.EngineAC != 0;
+    // eoc::ResistancesComponent::AC is the only reported total. The rebuild above
+    // is diagnostic: it cannot see worn item AC, so returning it as Total would
+    // silently report a wrong number when the engine field is empty.
+    info.Total = info.EngineAC;
+    info.Available = info.EngineAC != 0;
 
-    if (!info.FromEngine && info.HasArmor) {
-        // The rebuild cannot see AC that lives on worn items, so a zero engine
-        // total means the value we return is incomplete. Say so loudly instead
-        // of silently returning a number that looks authoritative.
-        WARN_ONCE("eoc::ResistancesComponent.AC is zero for a character; "
-            "Total is rebuilt from components and excludes worn item AC");
+    if (!info.Available) {
+        WARN_ONCE("eoc::ResistancesComponent.AC is zero; AC is unavailable for this entity");
     }
 
     return info;
@@ -239,11 +230,11 @@ int PushArmorClassInfo(lua_State* L, ArmorClassInfo const& info)
     lua_setfield(L, -2, "AbilityBlocked");
     lua_pushboolean(L, info.HasArmor);
     lua_setfield(L, -2, "HasArmor");
+    lua_pushboolean(L, info.Available);
+    lua_setfield(L, -2, "Available");
 
     push(L, EnumInfo<AbilityId>::Find(info.Ability));
     lua_setfield(L, -2, "Ability");
-    lua_pushstring(L, info.FromEngine ? "engine" : "components");
-    lua_setfield(L, -2, "Source");
 
     return 1;
 }

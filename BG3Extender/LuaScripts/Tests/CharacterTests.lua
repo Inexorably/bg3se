@@ -226,17 +226,9 @@ function TestCharacterArmorClass()
     AssertEquals(byGuid.Total, byEntity.Total)
     AssertEquals(byGuid.HasArmor, true)
 
-    -- The engine total is authoritative when it is populated; the rebuilt value
-    -- is only the diagnostic breakdown.
-    if byGuid.EngineAC ~= 0 then
-        AssertEquals(byGuid.Total, byGuid.EngineAC)
-        AssertEquals(byGuid.Source, "engine")
-    else
-        AssertEquals(byGuid.Total, byGuid.Computed)
-        AssertEquals(byGuid.Source, "components")
-        AssertEquals(byGuid.Computed,
-            math.max(byGuid.Base + byGuid.AbilityModifier, byGuid.OverrideAC) + byGuid.Boosts)
-    end
+    -- Total is the engine's own field, never a rebuilt value
+    AssertEquals(byGuid.Total, byGuid.EngineAC)
+    AssertEquals(byGuid.Available, byGuid.EngineAC ~= 0)
 
     -- Non-existent entities resolve to nil
     AssertEquals(Ext.Entity.GetArmorClass("00000000-0000-0000-0000-000000000000"), nil)

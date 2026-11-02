@@ -2176,6 +2176,7 @@ Osi = {}
 --- @field AbilityBlocked boolean
 --- @field AbilityModifier integer
 --- @field AbilityModifierCap integer
+--- @field Available boolean
 --- @field Base integer
 --- @field BoostCount integer
 --- @field Boosts integer
@@ -2184,7 +2185,6 @@ Osi = {}
 --- @field HasArmor boolean
 --- @field OverrideAC integer
 --- @field RawAbilityModifier integer
---- @field Source string
 --- @field Total integer
 
 
