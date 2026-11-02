@@ -79,6 +79,12 @@ HitResult* FunctorEventHooks::OnDealDamage(bg3se::stats::DealDamageFunctor__Appl
     HitDesc* hit, AttackDesc* attack, EntityHandle* sourceHandle2, HitWith hitWith, int conditionRollIndex,
     bool entityDamagedEventParam, __int64 a17, SpellId* spellId2)
 {
+    // Record the target for the duration of ApplyDamage: ThrowDamageEvent runs
+    // inside next(...) below and receives no target of its own.
+    EntityHandle previousTarget = damageTarget_;
+    damageDepth_++;
+    damageTarget_ = targetHandle->Handle;
+
     {
         DealDamageEventParams evt{
             .Functor = functor,
@@ -100,6 +106,11 @@ HitResult* FunctorEventHooks::OnDealDamage(bg3se::stats::DealDamageFunctor__Appl
 
     auto ret = next(result, functor, casterHandle, targetHandle, position, isFromItem, spellId, storyActionId, originator, classResourceMgr, 
         hit, attack, sourceHandle2, hitWith, conditionRollIndex, entityDamagedEventParam, a17, spellId2);
+
+    // Damage has been applied; drop the recorded target so nothing outside this
+    // call can read it.
+    damageDepth_--;
+    damageTarget_ = previousTarget;
 
     {
         DealtDamageEventParams evt;
@@ -129,7 +140,10 @@ void FunctorEventHooks::OnEntityDamageEvent(bg3se::esv::StatsSystem__ThrowDamage
     {
         BeforeDealDamageEventParams evt{
             .Hit = hit,
-            .Attack = attack
+            .Attack = attack,
+            // Only meaningful when this fired from inside ApplyDamage; empty
+            // otherwise, which callers can detect.
+            .Target = damageDepth_ > 0 ? damageTarget_ : EntityHandle{}
         };
         gExtender->GetServer().GetExtensionState().ThrowEvent<BeforeDealDamageEvent>(evt);
     }

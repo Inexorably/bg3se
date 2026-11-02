@@ -34,6 +34,11 @@ struct BeforeDealDamageEventParams : public lua::EventBase
 {
     HitDesc* Hit;
     [[bg3::legacy(DamageSums)]] AttackDesc* Attack;
+    // The entity taking the damage. StatsSystem::ThrowDamageEvent receives no
+    // target, so this is carried over from the enclosing
+    // DealDamageFunctor::ApplyDamage call. Null when damage is thrown from
+    // somewhere that did not come through that functor.
+    EntityHandle Target;
 };
 
 struct ExecuteFunctorEventParams : public lua::EventBase

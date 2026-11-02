@@ -15915,6 +15915,7 @@ Osi = {}
 --- @field Attack AttackDesc
 --- @field DamageSums AttackDesc
 --- @field Hit HitDesc
+--- @field Target EntityHandle Entity taking the damage; empty when the damage did not come through DealDamageFunctor::ApplyDamage
 
 
 --- @class EsvLuaDealDamageEvent:LuaEventBase

@@ -473,6 +473,36 @@ local handlerId = Ext.Events.GameStateChanged:Subscribe(handler)
 ...
 Ext.Events.GameStateChanged:Unsubscribe(handlerId)
 ```
+
+#### Damage events
+
+Three events relate to damage. They differ in what is populated when the handler runs, which matters if the handler needs to change the damage:
+
+| Event | `Target` | `Hit` damage | Can change the damage |
+|-------|----------|--------------|-----------------------|
+| `DealDamage` | yes | not yet rolled | no |
+| `BeforeDealDamage` | yes (see below) | populated | yes |
+| `DealtDamage` | yes | populated | no, already applied |
+
+`DealDamage` is thrown from `DealDamageFunctor::ApplyDamage` before the functor rolls its dice, so `Hit.DamageList` is empty and `Hit.Damage` is zero.
+
+`BeforeDealDamage` is thrown from `esv::StatsSystem::ThrowDamageEvent`, after the damage has been computed and before it is applied, so `Hit.DamageList` / `Hit.Damage` hold the real values. The engine does not pass the target to that call, so SE carries over the target of the enclosing `DealDamageFunctor::ApplyDamage` call. `Target` is empty when the damage originated somewhere that functor did not run (for example a direct `StatsSystem` call); check it before using it.
+
+Example: scale incoming damage for one character.
+```lua
+Ext.Events.BeforeDealDamage:Subscribe(function (e)
+    if not e.Target or e.Target == EntityHandle.Null then return end
+    if e.Target ~= Ext.Entity.UuidToHandle(MY_GUID) then return end
+
+    local list = e.Hit.DamageList
+    if not list then return end
+    for i = 1, #list do
+        list[i].Amount = math.floor(list[i].Amount * 0.55 + 0.5)
+    end
+end)
+```
+
+Note: the event's field is named `DamageSums` in some older IDE stubs; it refers to `Attack`.
 <a id="calling-osiris-from-lua"></a>
 ## Calling Osiris from Lua
 

@@ -50,6 +50,14 @@ private:
     template <class TParams>
     void OnFunctorExecute(bg3se::stats::ExecuteFunctorProc<TParams>* next, HitResult* hit, bg3se::stats::Functors* self, TParams* params);
     void OnInterruptFunctorExecute(bg3se::stats::ExecuteInterruptFunctorProc* next, HitResult* hit, ecs::EntityWorld* world, bg3se::stats::Functors* self, bg3se::stats::InterruptContextData* params);
+
+    // esv::StatsSystem::ThrowDamageEvent is called from inside
+    // DealDamageFunctor::ApplyDamage, so the target is only known to the outer
+    // hook. The innermost target seen by OnDealDamage is recorded for the
+    // duration of that call so BeforeDealDamage can report it; the depth counter
+    // keeps nested functors from leaving a stale value behind.
+    EntityHandle damageTarget_{};
+    uint32_t damageDepth_{ 0 };
 };
 
 
